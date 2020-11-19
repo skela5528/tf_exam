@@ -36,3 +36,4 @@ __pypackages__/
 
 # Project
 out_*/
+.idea/
