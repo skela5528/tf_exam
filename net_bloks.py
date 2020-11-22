@@ -43,7 +43,7 @@ def get_sample_image_model(input_shape, num_classes, bn=False, dropout_p=0):
 
     model.add(tf.keras.layers.Dense(128, activation='relu'))
     if dropout_p > 0.0:
-        model.add(tf.keras.layers.Dropout(0.2))
+        model.add(tf.keras.layers.Dropout(dropout_p))
     out_units = 1
     out_activation = 'sigmoid'
     if num_classes > 2:
