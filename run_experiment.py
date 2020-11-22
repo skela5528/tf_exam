@@ -1,18 +1,58 @@
 import os
+import json
 import pathlib
 import numpy as np
 import logging
 from datetime import datetime
 from matplotlib import pyplot as plt
 
+import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 import tensorflow as tf
 import tensorflow_datasets as tfds
 from tensorflow.python.keras import backend as K
 from tensorflow.keras.preprocessing.image import ImageDataGenerator
 
-import data
 from net_bloks import *
+
+"""
+- The exam contains 5 problems to solve, part of the code is already written and you need to complete it.
+
+- I don't have GPU on my laptop and also lost time while waiting for training to be done 
+(never more than ~10mins each time but it adds up), so if you can get GPU go for it!
+
+- for multiple questions the source comes from TensorFlow Datasets, 
+spend some time understanding the structure of the objects you get as a result from load_data
+
+- You will get 5 different files, one per question
+
+1. Use EarlyStopping() keras callback (with restore_best_weights=True) to stop training before overfitting while reserving best weights so far.
+2. Use ModelCheckpoint() keras callback (with save_best_only=True) to save a copy of your model whenever it gets better.
+3. Use include_optimizer=False option in your keras.models.save_model (or model.save) statement, to reduce the size of your model. 
+Reduce my model’s size from ~300 MB to ~ 41 MB!
+4. find best acccuracy -> with same accuracy using fewer/simpler layers, faster optimizer 
+(e.g. “RMSprop” is heavier and slower than “Adam”), and/or fewer epochs.
+
+FROM CANDIDATE HANDBOOK
+ - Preprocess data to get it ready for use in a model
+ - Use models to predict results.
+ - augmentation and dropout.
+ - Use pretrained models (transfer learning)
+ - Extract features from pre-trained models.
+ - Use callbacks to trigger the end of training cycles
+ - Use datasets in different formats, including json and csv.
+ - Use ImageDataGenerator
+ - Use RNNS, LSTMs, GRUs and CNNs in models that work with text.
+ - Train LSTMs on existing text to generate text (such as songs and poetry)
+ - Use TensorFlow for time series forecasting.
+ - 
+
+"""
+# TODO 1 - prepare sample models for text / for time seq
+# TODO 2 - train a model for each topic - take data from 'tfds'
+# TODO 3 practice save/ load/ transfer_learning/
+# TODO 4 explore tf.data.Dataset interface
+# TODO 5 transfer learning
 
 _DATA_DIR = "/home/cortica/.keras/datasets/flower_photos"
 logging.basicConfig(format='%(asctime)s %(levelname)-8s %(message)s')
@@ -20,9 +60,16 @@ LOG = logging.getLogger("tf_exam")
 
 
 def check_environment():
-    print(f"* check packages versions *")
-    print(f" - tf version {tf.__version__}")
-    print(f" - tfds version {tfds.__version__}\n")
+    import sys
+
+    print(f"* check environment *")
+    print(f" - python: {sys.version}")
+    print(f" - tf version: {tf.__version__}")
+    print(f" - tfds version: {tfds.__version__}")
+    print(f" - tf is_built_with_cuda: {tf.test.is_built_with_cuda()}")
+    tf.config.list_physical_devices('GPU')
+
+    print()
 
 
 def download_data():
@@ -30,17 +77,6 @@ def download_data():
     data_dir = tf.keras.utils.get_file('flower_photos', origin=dataset_url, untar=True)
     data_dir = pathlib.Path(data_dir)
     return data_dir
-
-
-def get_model_image_classification(input_shape=(256, 256, 3), kernels=(16, 32, 64, 32, 64), classifier_units=(256, 5)):
-    model = tf.keras.Sequential()
-    model.add(tf.keras.layers.InputLayer(input_shape=input_shape))
-    for bid, k in enumerate(kernels):
-        model.add(get_conv_pool_block(k, add_batch_norm=True, bid=bid))
-    model.add(tf.keras.layers.GlobalAveragePooling2D())
-    model.add(get_classifier(classifier_units, output_activation="softmax"))
-    model.summary()
-    return model
 
 
 class CustomCallback(tf.keras.callbacks.Callback):
@@ -58,17 +94,35 @@ class LRSchedulePerBatch(tf.keras.callbacks.Callback):
         print(f"\n...Training: end of batch {batch} LR->{new_lr: 0.09f}\n\n")
 
 
-class ExperimentRunner:
-    def __init__(self, model: tf.keras.Sequential, train_data, validation_data, out_dir="out"):
-        self.model = model
-        self.train_data = train_data
-        self.validation_data = validation_data
-        self.history = None
-        time_now = 0  # datetime.now().strftime("%H:%M:%S")
-        self.out_dir = f"{out_dir}_{time_now}"
-        os.makedirs(self.out_dir, exist_ok=True)
+class TrainingUtils:
+    @staticmethod
+    def save_history(model_history, out_path=""):
+        time_now = datetime.now().strftime("%H:%M:%S")
+        out_path += f"hist_{time_now}.json"
+        history_dict = model_history.history
+        for k, v in history_dict.items():
+            if isinstance(v, list):
+                history_dict[k] = [float(x) for x in v]
+        with open(out_path, 'w') as out_stream:
+            json.dump(history_dict, out_stream)
 
-    def select_lr(self, loss='categorical_crossentropy', optimizer=None, epochs=150, batch_size=32, mode="epoch"):
+    @staticmethod
+    def train_model(model, train_data, validation_data, lr=.001, loss='categorical_crossentropy', epochs=3, verbose=1):
+        K.clear_session()
+        tf.random.set_seed(51)
+        np.random.seed(51)
+
+        opt = tf.keras.optimizers.Adam(learning_rate=lr)
+        model.compile(opt, loss=loss, metrics=["acc"])
+        history = model.fit(train_data,
+                            validation_data=validation_data,
+                            epochs=epochs,
+                            verbose=verbose)
+        return history
+
+    @staticmethod
+    def select_lr(model, train_data, loss='categorical_crossentropy', optimizer=None, epochs=150, batch_size=32,
+                  mode="epoch"):
         assert mode in ["epoch", "batch", "epoch_coarse"], LOG.error(f"wrong mode: {mode}!!!")
         initial_lr = 1e-8
         K.clear_session()
@@ -85,50 +139,54 @@ class ExperimentRunner:
             epochs = 9
             lr_schedule = tf.keras.callbacks.LearningRateScheduler(lambda epoch: 10**(epoch - epochs))
 
-        self.model.compile(loss=loss, optimizer=optimizer)
-        history = self.model.fit(self.train_data,
-                                 epochs=epochs,
-                                 batch_size=batch_size,
-                                 callbacks=[lr_schedule, CustomCallback()])
-        self._visualize_lr_selection(history.history.get("lr"), history.history.get("loss"), loss)
+        model.compile(loss=loss, optimizer=optimizer)
+        history = model.fit(train_data,
+                            epochs=epochs,
+                            batch_size=batch_size,
+                            callbacks=[lr_schedule, CustomCallback()])
+        TrainingUtils.visualize_lr_selection(history.history.get("lr"), history.history.get("loss"), loss)
+        return history
 
-    def _visualize_lr_selection(self, lr_values, loss_values, loss_name, axis_range=[1e-8, 1e-1, 0, 2]):
+    @staticmethod
+    def visualize_lr_selection(lr_values, loss_values, loss_name, out_dir=""):
         fig, ax = plt.gcf(), plt.gca()
         ax.semilogx(lr_values, loss_values, marker="d")
+        loss_range = [max(min(loss_values) - .5, 0), 3 * min(loss_values)]
+        axis_range = [1e-8, 1e-1, *loss_range]
         ax.axis(axis_range)
         ax.grid(axis='x')
         time_now = datetime.now().strftime("%H:%M:%S")
-        plot_save_path = os.path.join(self.out_dir, f"lr_search_{time_now}.png")
+        plot_save_path = os.path.join(out_dir, f"lr_search_{time_now}.png")
         fig.savefig(plot_save_path, dpi=120)
-
-    def train_model(self, lr=.001, loss='categorical_crossentropy', epochs=3, verbose=1):
-        K.clear_session()
-        tf.random.set_seed(51)
-        np.random.seed(51)
-
-        opt = tf.keras.optimizers.RMSprop(learning_rate=lr)
-        self.model.compile(opt, loss=loss, metrics=["acc"])
-        self.history = self.model.fit(self.train_data,
-                                      validation_data=self.validation_data,
-                                      epochs=epochs,
-                                      verbose=verbose)
-
-    def visualize_training(self):
-        pass
 
 
 if __name__ == '__main__':
-    check_environment()
+    # check_environment()
 
-    m = get_model_image_classification()
-    train = data.get_image_dataset_train(directory=_DATA_DIR)
-    validation = data.get_image_dataset_validation(directory=_DATA_DIR)
+    m = get_sample_image_model(input_shape=(128, 128, 3), num_classes=5)
+    m.summary()
 
-    exp_flowers = ExperimentRunner(model=m, train_data=train, validation_data=validation)
-    opt = tf.keras.optimizers.RMSprop()
-    exp_flowers.select_lr(epochs=3, mode="epoch_coarse", optimizer=opt, loss="sparse_categorical_crossentropy")
+    VAL_SPLIT = .99
+    DATA_DIR = _DATA_DIR
+    BS = 64
+    IMG_SIZE = (128, 128)
+    train_datagen = tf.keras.preprocessing.image.ImageDataGenerator(rotation_range=.1,
+                                                                    width_shift_range=0.1,
+                                                                    height_shift_range=0.1,
+                                                                    zoom_range=0.1,
+                                                                    horizontal_flip=True,
+                                                                    validation_split=VAL_SPLIT)
+    validation_datagen = tf.keras.preprocessing.image.ImageDataGenerator(validation_split=VAL_SPLIT)
 
-    # exp_flowers.train_model(loss='sparse_categorical_crossentropy', epochs=5)
-    # print(hist)
+    # class_mode: One of "categorical", "binary", "sparse"
+    train = train_datagen.flow_from_directory(directory=DATA_DIR, target_size=IMG_SIZE, subset='training',
+                                              batch_size=BS, interpolation='bicubic', class_mode='categorical', seed=1)
+    validation = validation_datagen.flow_from_directory(directory=DATA_DIR, target_size=IMG_SIZE, subset='validation',
+                                                        batch_size=BS, interpolation='bicubic', class_mode='categorical', seed=1)
+
+    tu = TrainingUtils()
+    hist = tu.select_lr(m, train, mode='epoch_coarse')
+    # hist = tu.train_model(m, train, validation, lr=.001, loss='categorical_crossentropy', epochs=3)
+    tu.save_history(hist)
 
 
