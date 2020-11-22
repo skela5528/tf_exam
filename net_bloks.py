@@ -1,7 +1,5 @@
 import tensorflow as tf
 
-from tensorflow.keras.applications import vgg16, resnet
-
 
 def get_conv_pool_block(filters, kernel_size=3, activation='relu', add_batch_norm=False, bid=-1):
     name = f"Conv-{filters}-MaxPool-{bid}"
@@ -24,9 +22,40 @@ def get_classifier(units=(128, 1), output_activation="sigmoid"):
     return classifier
 
 
-def get_simple_text_model():
+def get_sample_image_model(input_shape, num_classes, bn=False, dropout_p=0):
+    model = tf.keras.Sequential()
+    model.add(tf.keras.layers.InputLayer(input_shape=input_shape))
+
+    # block Conv - Pool - Bn
+    model.add(tf.keras.layers.Conv2D(filters=16, kernel_size=3, padding='same', activation='relu'))
+    model.add(tf.keras.layers.MaxPool2D(pool_size=2))
+    if bn:
+        model.add(tf.keras.layers.BatchNormalization())
+
+    # block Conv - Pool - Bn
+    model.add(tf.keras.layers.Conv2D(filters=32, kernel_size=3, padding='same', activation='relu'))
+    model.add(tf.keras.layers.MaxPool2D(pool_size=2))
+    if bn:
+        model.add(tf.keras.layers.BatchNormalization())
+
+    # Global Pool - Classifier
+    model.add(tf.keras.layers.GlobalAveragePooling2D())
+
+    model.add(tf.keras.layers.Dense(128, activation='relu'))
+    if dropout_p > 0.0:
+        model.add(tf.keras.layers.Dropout(0.2))
+    out_units = 1
+    out_activation = 'sigmoid'
+    if num_classes > 2:
+        out_units = num_classes
+        out_activation = 'softmax'
+    model.add(tf.keras.layers.Dense(units=out_units, activation=out_activation))
+    return model
+
+
+def get_sample_text_model():
     pass
 
 
-def get_simple_time_series_model():
+def get_sample_time_series_model():
     pass
