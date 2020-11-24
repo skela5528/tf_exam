@@ -38,6 +38,12 @@ def get_sample_image_model(input_shape, num_classes, bn=False, dropout_p=0):
     if bn:
         model.add(tf.keras.layers.BatchNormalization())
 
+    # block Conv - Pool - Bn
+    model.add(tf.keras.layers.Conv2D(filters=64, kernel_size=3, padding='same', activation='relu'))
+    model.add(tf.keras.layers.MaxPool2D(pool_size=2))
+    if bn:
+        model.add(tf.keras.layers.BatchNormalization())
+
     # Global Pool - Classifier
     model.add(tf.keras.layers.GlobalAveragePooling2D())
 
