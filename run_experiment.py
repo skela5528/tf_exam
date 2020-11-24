@@ -1,4 +1,3 @@
-import os
 import json
 import pathlib
 import numpy as np
@@ -11,7 +10,6 @@ os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 import tensorflow as tf
 import tensorflow_datasets as tfds
 from tensorflow.python.keras import backend as K
-from tensorflow.keras.preprocessing.image import ImageDataGenerator
 
 from net_bloks import *
 
@@ -19,16 +17,18 @@ from net_bloks import *
 - The exam contains 5 problems to solve, part of the code is already written and you need to complete it.
 
 - I don't have GPU on my laptop and also lost time while waiting for training to be done 
-(never more than ~10mins each time but it adds up), so if you can get GPU go for it!
+(never more than ~10 mins each time but it adds up), so if you can get GPU go for it!
 
 - for multiple questions the source comes from TensorFlow Datasets, 
 spend some time understanding the structure of the objects you get as a result from load_data
 
 - You will get 5 different files, one per question
 
-1. Use EarlyStopping() keras callback (with restore_best_weights=True) to stop training before overfitting while reserving best weights so far.
+1. Use EarlyStopping() keras callback (with restore_best_weights=True) to stop training before overfitting while 
+reserving best weights so far.
 2. Use ModelCheckpoint() keras callback (with save_best_only=True) to save a copy of your model whenever it gets better.
-3. Use include_optimizer=False option in your keras.models.save_model (or model.save) statement, to reduce the size of your model. 
+3. Use include_optimizer=False option in your keras.models.save_model (or model.save) statement, to reduce the size of 
+your model. 
 Reduce my model’s size from ~300 MB to ~ 41 MB!
 4. find best acccuracy -> with same accuracy using fewer/simpler layers, faster optimizer 
 (e.g. “RMSprop” is heavier and slower than “Adam”), and/or fewer epochs.
@@ -107,13 +107,19 @@ class TrainingUtils:
             json.dump(history_dict, out_stream)
 
     @staticmethod
-    def train_model(model, train_data, validation_data, lr=.001, loss='categorical_crossentropy', epochs=3, verbose=1):
+    def train_model(model, train_data, validation_data, optimizer, loss='categorical_crossentropy', epochs=3, verbose=1):
+        # init
         K.clear_session()
         tf.random.set_seed(51)
         np.random.seed(51)
 
-        opt = tf.keras.optimizers.Adam(learning_rate=lr)
+        # optimizer
+        opt = tf.keras.optimizers.Adam() if optimizer is None else optimizer
+
+        # compile
         model.compile(opt, loss=loss, metrics=["acc"])
+
+        # fit
         history = model.fit(train_data,
                             validation_data=validation_data,
                             epochs=epochs,
@@ -144,11 +150,11 @@ class TrainingUtils:
                             epochs=epochs,
                             batch_size=batch_size,
                             callbacks=[lr_schedule, CustomCallback()])
-        TrainingUtils.visualize_lr_selection(history.history.get("lr"), history.history.get("loss"), loss)
+        TrainingUtils.visualize_lr_selection(history.history.get("lr"), history.history.get("loss"))
         return history
 
     @staticmethod
-    def visualize_lr_selection(lr_values, loss_values, loss_name, out_dir=""):
+    def visualize_lr_selection(lr_values, loss_values, out_dir="."):
         fig, ax = plt.gcf(), plt.gca()
         ax.semilogx(lr_values, loss_values, marker="d")
         loss_range = [max(min(loss_values) - .5, 0), 3 * min(loss_values)]
@@ -159,17 +165,32 @@ class TrainingUtils:
         plot_save_path = os.path.join(out_dir, f"lr_search_{time_now}.png")
         fig.savefig(plot_save_path, dpi=120)
 
+    @staticmethod
+    def save_model(model: tf.keras.Model):
+        time_now = datetime.now().strftime("%H_%M_%S")
+        save_path = f"model_{time_now}.h5"
+        model.save(save_path, include_optimizer=False, save_format='h5')
 
-if __name__ == '__main__':
+    @staticmethod
+    def load_model(model_path: str):
+        model = tf.keras.models.load_model(model_path)  # type: tf.keras.Model
+        return model
+
+
+def run_image_classification():
     # check_environment()
 
-    m = get_sample_image_model(input_shape=(128, 128, 3), num_classes=5)
-    m.summary()
-
-    VAL_SPLIT = .99
+    # parameters
+    VAL_SPLIT = .50
     DATA_DIR = _DATA_DIR
     BS = 64
     IMG_SIZE = (128, 128)
+
+    # get model
+    model = get_sample_image_model(input_shape=(128, 128, 3), num_classes=5)
+    model.summary()
+
+    # get data
     train_datagen = tf.keras.preprocessing.image.ImageDataGenerator(rotation_range=.1,
                                                                     width_shift_range=0.1,
                                                                     height_shift_range=0.1,
@@ -177,16 +198,21 @@ if __name__ == '__main__':
                                                                     horizontal_flip=True,
                                                                     validation_split=VAL_SPLIT)
     validation_datagen = tf.keras.preprocessing.image.ImageDataGenerator(validation_split=VAL_SPLIT)
-
     # class_mode: One of "categorical", "binary", "sparse"
     train = train_datagen.flow_from_directory(directory=DATA_DIR, target_size=IMG_SIZE, subset='training',
                                               batch_size=BS, interpolation='bicubic', class_mode='categorical', seed=1)
     validation = validation_datagen.flow_from_directory(directory=DATA_DIR, target_size=IMG_SIZE, subset='validation',
                                                         batch_size=BS, interpolation='bicubic', class_mode='categorical', seed=1)
 
+    # training
     tu = TrainingUtils()
-    hist = tu.select_lr(m, train, mode='epoch_coarse')
-    # hist = tu.train_model(m, train, validation, lr=.001, loss='categorical_crossentropy', epochs=3)
+    hist = tu.select_lr(model, train, mode='epoch_coarse')
+    # hist = tu.train_model(model, train, validation, lr=.001, loss='categorical_crossentropy', epochs=3)
+
+    # save
+    tu.save_model(model)
     tu.save_history(hist)
 
 
+if __name__ == '__main__':
+    run_image_classification()
