@@ -96,6 +96,17 @@ class LRSchedulePerBatch(tf.keras.callbacks.Callback):
 
 class TrainingUtils:
     @staticmethod
+    def save_model(model: tf.keras.Model):
+        time_now = datetime.now().strftime("%H_%M_%S")
+        save_path = f"model_{time_now}.h5_"
+        model.save(save_path, include_optimizer=False, save_format='h5')
+
+    @staticmethod
+    def load_model(model_path: str):
+        model = tf.keras.models.load_model(model_path)  # type: tf.keras.Model
+        return model
+
+    @staticmethod
     def save_history(model_history, out_path=""):
         time_now = datetime.now().strftime("%H:%M:%S")
         out_path += f"hist_{time_now}.json"
@@ -105,26 +116,6 @@ class TrainingUtils:
                 history_dict[k] = [float(x) for x in v]
         with open(out_path, 'w') as out_stream:
             json.dump(history_dict, out_stream)
-
-    @staticmethod
-    def train_model(model, train_data, validation_data, optimizer, loss='categorical_crossentropy', epochs=3, verbose=1):
-        # init
-        K.clear_session()
-        tf.random.set_seed(51)
-        np.random.seed(51)
-
-        # optimizer
-        opt = tf.keras.optimizers.Adam() if optimizer is None else optimizer
-
-        # compile
-        model.compile(opt, loss=loss, metrics=["acc"])
-
-        # fit
-        history = model.fit(train_data,
-                            validation_data=validation_data,
-                            epochs=epochs,
-                            verbose=verbose)
-        return history
 
     @staticmethod
     def select_lr(model, train_data, loss='categorical_crossentropy', optimizer=None, epochs=150, batch_size=32,
@@ -157,37 +148,75 @@ class TrainingUtils:
     def visualize_lr_selection(lr_values, loss_values, out_dir="."):
         fig, ax = plt.gcf(), plt.gca()
         ax.semilogx(lr_values, loss_values, marker="d")
-        loss_range = [max(min(loss_values) - .5, 0), 3 * min(loss_values)]
+        loss_range = [max(min(loss_values) - .5, 0), 2 * min(loss_values)]
         axis_range = [1e-8, 1e-1, *loss_range]
         ax.axis(axis_range)
         ax.grid(axis='x')
+        # save
         time_now = datetime.now().strftime("%H:%M:%S")
-        plot_save_path = os.path.join(out_dir, f"lr_search_{time_now}.png")
+        plot_save_path = os.path.join(out_dir, f"plot_lr_{time_now}.png")
         fig.savefig(plot_save_path, dpi=120)
 
     @staticmethod
-    def save_model(model: tf.keras.Model):
-        time_now = datetime.now().strftime("%H_%M_%S")
-        save_path = f"model_{time_now}.h5"
-        model.save(save_path, include_optimizer=False, save_format='h5')
+    def visualize_training(loss_train, loss_validation, acc_train, acc_validation, out_dir='.'):
+        fig, axs = plt.subplots(1, 2)
+        fig.set_size_inches(18, 6)
+        axs[0].plot(loss_train, marker='.', label='train', lw=1)
+        axs[0].plot(loss_validation, marker='.', label='validation', lw=1)
+        axs[0].set_xlabel("#epoch")
+        axs[0].set_ylabel("Loss")
+        axs[0].legend()
+
+        axs[1].plot(acc_train, marker='.', label='train', lw=1)
+        axs[1].plot(acc_validation, marker='.', label='validation', lw=1)
+        axs[1].set_xlabel("#epoch")
+        axs[1].set_ylabel("ACC")
+        axs[1].set_ylim(.5, 1.0)
+        axs[1].legend()
+        # save
+        time_now = datetime.now().strftime("%H:%M:%S")
+        plot_save_path = os.path.join(out_dir, f"plot_train_{time_now}.png")
+        fig.tight_layout()
+        fig.savefig(plot_save_path, dpi=120)
 
     @staticmethod
-    def load_model(model_path: str):
-        model = tf.keras.models.load_model(model_path)  # type: tf.keras.Model
-        return model
+    def train_model(model, train_data, validation_data, optimizer, loss='categorical_crossentropy', epochs=3, verbose=1):
+        # init
+        K.clear_session()
+        tf.random.set_seed(51)
+        np.random.seed(51)
+
+        # optimizer
+        opt = tf.keras.optimizers.Adam() if optimizer is None else optimizer
+
+        # compile
+        model.compile(opt, loss=loss, metrics=["acc"])
+
+        # fit
+        history = model.fit(train_data,
+                            validation_data=validation_data,
+                            epochs=epochs,
+                            verbose=verbose)
+        return history
+
+
+def show_data(batch_data: np.ndarray):
+    pass
 
 
 def run_image_classification():
     # check_environment()
 
     # parameters
-    VAL_SPLIT = .50
+    VAL_SPLIT = .2
     DATA_DIR = _DATA_DIR
     BS = 64
-    IMG_SIZE = (128, 128)
+    IMG_SIZE = (256, 256)
+    LR = 10 ** -3
+    BATCH_NORM = True
 
     # get model
-    model = get_sample_image_model(input_shape=(128, 128, 3), num_classes=5)
+    model = get_sample_image_model(input_shape=(*IMG_SIZE, 3), num_classes=5, bn=BATCH_NORM)
     model.summary()
 
     # get data
@@ -196,8 +225,10 @@ def run_image_classification():
                                                                     height_shift_range=0.1,
                                                                     zoom_range=0.1,
                                                                     horizontal_flip=True,
-                                                                    validation_split=VAL_SPLIT)
-    validation_datagen = tf.keras.preprocessing.image.ImageDataGenerator(validation_split=VAL_SPLIT)
+                                                                    validation_split=VAL_SPLIT,
+                                                                    rescale=1/255)
+    validation_datagen = tf.keras.preprocessing.image.ImageDataGenerator(validation_split=VAL_SPLIT,
+                                                                         rescale=1/255)
     # class_mode: One of "categorical", "binary", "sparse"
     train = train_datagen.flow_from_directory(directory=DATA_DIR, target_size=IMG_SIZE, subset='training',
                                               batch_size=BS, interpolation='bicubic', class_mode='categorical', seed=1)
@@ -206,12 +237,15 @@ def run_image_classification():
 
     # training
     tu = TrainingUtils()
-    hist = tu.select_lr(model, train, mode='epoch_coarse')
-    # hist = tu.train_model(model, train, validation, lr=.001, loss='categorical_crossentropy', epochs=3)
+    opt = tf.keras.optimizers.Adam(learning_rate=LR)
+    # hist = tu.select_lr(model, train, mode='epoch_coarse')
+    hist = tu.train_model(model, train, validation, opt, loss='categorical_crossentropy', epochs=3)
 
     # save
     tu.save_model(model)
     tu.save_history(hist)
+    tu.visualize_training(hist.history['loss'], hist.history.get('val_loss', []),
+                          hist.history['acc'], hist.history.get('val_acc', []))
 
 
 if __name__ == '__main__':
