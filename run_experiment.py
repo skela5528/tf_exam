@@ -53,6 +53,7 @@ FROM CANDIDATE HANDBOOK
 # TODO 3 practice save/ load/ transfer_learning/
 # TODO 4 explore tf.data.Dataset interface
 # TODO 5 transfer learning
+# TODO 5.1 text load pretrained embeddings
 
 _DATA_DIR = "/home/cortica/.keras/datasets/flower_photos"
 logging.basicConfig(format='%(asctime)s %(levelname)-8s %(message)s')
@@ -77,6 +78,12 @@ def download_data():
     data_dir = tf.keras.utils.get_file('flower_photos', origin=dataset_url, untar=True)
     data_dir = pathlib.Path(data_dir)
     return data_dir
+
+
+def download_fmnist():
+    fmnist = tf.keras.datasets.fashion_mnist
+    (x_train, y_train), (x_test, y_test) = fmnist.load_data()
+    return (x_train, y_train), (x_test, y_test)
 
 
 class CustomCallback(tf.keras.callbacks.Callback):
@@ -121,7 +128,7 @@ class TrainingUtils:
     def select_lr(model, train_data, loss='categorical_crossentropy', optimizer=None, epochs=150, batch_size=32,
                   mode="epoch"):
         assert mode in ["epoch", "batch", "epoch_coarse"], LOG.error(f"wrong mode: {mode}!!!")
-        initial_lr = 1e-8
+        initial_lr = 1e-5
         K.clear_session()
         if optimizer is None:
             optimizer = tf.keras.optimizers.SGD(momentum=0.9)
@@ -129,12 +136,12 @@ class TrainingUtils:
 
         lr_schedule = None
         if mode == "epoch":
-            lr_schedule = tf.keras.callbacks.LearningRateScheduler(lambda epoch: 1e-8 * 10 ** (epoch / 20))
+            lr_schedule = tf.keras.callbacks.LearningRateScheduler(lambda epoch: initial_lr * 10 ** (epoch / 20))
         elif mode == "batch":
             lr_schedule = LRSchedulePerBatch()
         elif mode == "epoch_coarse":
-            epochs = 9
-            lr_schedule = tf.keras.callbacks.LearningRateScheduler(lambda epoch: 10**(epoch - epochs))
+            epochs = 6
+            lr_schedule = tf.keras.callbacks.LearningRateScheduler(lambda epoch: float(10 ** (epoch - epochs + 1)))
 
         model.compile(loss=loss, optimizer=optimizer)
         history = model.fit(train_data,
@@ -149,6 +156,7 @@ class TrainingUtils:
         fig, ax = plt.gcf(), plt.gca()
         ax.semilogx(lr_values, loss_values, marker="d")
         loss_range = [max(min(loss_values) - .5, 0), 2 * min(loss_values)]
+        lr_range = (min(lr_values), max(lr_values))
         axis_range = [1e-8, 1e-1, *loss_range]
         ax.axis(axis_range)
         ax.grid(axis='x')
@@ -165,6 +173,8 @@ class TrainingUtils:
         axs[0].plot(loss_validation, marker='.', label='validation', lw=1)
         axs[0].set_xlabel("#epoch")
         axs[0].set_ylabel("Loss")
+        axs[0].yaxis.grid(True)
+        axs[0].set_ylim(0, 5)
         axs[0].legend()
 
         axs[1].plot(acc_train, marker='.', label='train', lw=1)
@@ -172,6 +182,7 @@ class TrainingUtils:
         axs[1].set_xlabel("#epoch")
         axs[1].set_ylabel("ACC")
         axs[1].set_ylim(.5, 1.0)
+        axs[1].yaxis.grid(True)
         axs[1].legend()
         # save
         time_now = datetime.now().strftime("%H:%M:%S")
@@ -180,7 +191,8 @@ class TrainingUtils:
         fig.savefig(plot_save_path, dpi=120)
 
     @staticmethod
-    def train_model(model, train_data, validation_data, optimizer, loss='categorical_crossentropy', epochs=3, verbose=1):
+    def train_model(model: tf.keras.Model, train_data, validation_data, optimizer, loss='categorical_crossentropy',
+                    epochs=3, verbose=1, callbacks=None):
         # init
         K.clear_session()
         tf.random.set_seed(51)
@@ -196,7 +208,8 @@ class TrainingUtils:
         history = model.fit(train_data,
                             validation_data=validation_data,
                             epochs=epochs,
-                            verbose=verbose)
+                            verbose=verbose,
+                            callbacks=callbacks)
         return history
 
 
@@ -207,16 +220,23 @@ def show_data(batch_data: np.ndarray):
 def run_image_classification():
     # check_environment()
 
-    # parameters
-    VAL_SPLIT = .2
+    # params data #
     DATA_DIR = _DATA_DIR
-    BS = 64
-    IMG_SIZE = (256, 256)
-    LR = 10 ** -3
+    VAL_SPLIT = .2
+    IMG_SIZE = (28, 28)
+    CHANNELS = 1
+    N_CLASSES = 10
+
+    # params model #
     BATCH_NORM = True
 
+    # params training #
+    LR = 10 ** -1
+    BS = 512
+    N_EPOCHS = 3
+
     # get model
-    model = get_sample_image_model(input_shape=(*IMG_SIZE, 3), num_classes=5, bn=BATCH_NORM)
+    model = get_sample_image_model(input_shape=(*IMG_SIZE, CHANNELS), num_classes=N_CLASSES, bn=BATCH_NORM)
     model.summary()
 
     # get data
@@ -229,24 +249,49 @@ def run_image_classification():
                                                                     rescale=1/255)
     validation_datagen = tf.keras.preprocessing.image.ImageDataGenerator(validation_split=VAL_SPLIT,
                                                                          rescale=1/255)
-    # class_mode: One of "categorical", "binary", "sparse"
-    train = train_datagen.flow_from_directory(directory=DATA_DIR, target_size=IMG_SIZE, subset='training',
-                                              batch_size=BS, interpolation='bicubic', class_mode='categorical', seed=1)
-    validation = validation_datagen.flow_from_directory(directory=DATA_DIR, target_size=IMG_SIZE, subset='validation',
-                                                        batch_size=BS, interpolation='bicubic', class_mode='categorical', seed=1)
+
+    # flowers data
+    # # class_mode: One of "categorical", "binary", "sparse"
+    # train = train_datagen.flow_from_directory(directory=DATA_DIR, target_size=IMG_SIZE, subset='training',
+    #                                           batch_size=BS, interpolation='bicubic', class_mode='categorical', seed=1)
+    # validation = validation_datagen.flow_from_directory(directory=DATA_DIR, target_size=IMG_SIZE, subset='validation',
+    #                                                     batch_size=BS, interpolation='bicubic', class_mode='categorical', seed=1)
+
+    # fashion_mnist data
+    (x_train, labels_train), (x_validation, labels_validation) = download_fmnist()
+    x_train = x_train[:, :, :, np.newaxis]
+    x_validation = x_validation[:, :, :, np.newaxis]
+    train = train_datagen.flow(x_train, labels_train, batch_size=BS)
+    validation = validation_datagen.flow(x_validation, labels_validation, batch_size=BS)
 
     # training
     tu = TrainingUtils()
     opt = tf.keras.optimizers.Adam(learning_rate=LR)
-    # hist = tu.select_lr(model, train, mode='epoch_coarse')
-    hist = tu.train_model(model, train, validation, opt, loss='categorical_crossentropy', epochs=3)
+    save_best_callback = tf.keras.callbacks.ModelCheckpoint(filepath="best_model",
+                                                            save_weights_only=True,
+                                                            monitor='val_acc',
+                                                            save_best_only=True)
+    lr_callback = tf.keras.callbacks.LearningRateScheduler(lambda ep, lr: lr if ep < 20 else lr / 2)
+    # hist = tu.select_lr(model, train, mode='epoch_coarse', loss=tf.keras.losses.sparse_categorical_crossentropy, batch_size=BS)
+    hist = tu.train_model(model, train, validation, opt,
+                          loss='sparse_categorical_crossentropy',
+                          epochs=N_EPOCHS,
+                          callbacks=[save_best_callback, lr_callback])
 
     # save
-    tu.save_model(model)
-    tu.save_history(hist)
-    tu.visualize_training(hist.history['loss'], hist.history.get('val_loss', []),
-                          hist.history['acc'], hist.history.get('val_acc', []))
+    # tu.save_model(model)
+    # tu.save_history(hist)
+    tu.visualize_training(hist.history['loss'], hist.history.get('val_loss', []), hist.history['acc'], hist.history.get('val_acc', []))
+
+
+    # LOAD best model !!! check warnings!!
+    # model.load_weights("best_model")
+    # model.compile(opt, loss="sparse_categorical_crossentropy", metrics=["acc"])
+    # model.evaluate(validation)
 
 
 if __name__ == '__main__':
+    # check_environment()
     run_image_classification()
+
+
