@@ -1,59 +1,27 @@
+import os
 import json
 import pathlib
-import numpy as np
 import logging
+import numpy as np
+from typing import Tuple
 from datetime import datetime
 from matplotlib import pyplot as plt
 
-import os
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"
 import tensorflow as tf
 import tensorflow_datasets as tfds
 from tensorflow.python.keras import backend as K
+from tensorflow.keras.preprocessing.text import Tokenizer
 
 from net_bloks import *
 
-"""
-- The exam contains 5 problems to solve, part of the code is already written and you need to complete it.
 
-- I don't have GPU on my laptop and also lost time while waiting for training to be done 
-(never more than ~10 mins each time but it adds up), so if you can get GPU go for it!
-
-- for multiple questions the source comes from TensorFlow Datasets, 
-spend some time understanding the structure of the objects you get as a result from load_data
-
-- You will get 5 different files, one per question
-
-1. Use EarlyStopping() keras callback (with restore_best_weights=True) to stop training before overfitting while 
-reserving best weights so far.
-2. Use ModelCheckpoint() keras callback (with save_best_only=True) to save a copy of your model whenever it gets better.
-3. Use include_optimizer=False option in your keras.models.save_model (or model.save) statement, to reduce the size of 
-your model. 
-Reduce my model’s size from ~300 MB to ~ 41 MB!
-4. find best acccuracy -> with same accuracy using fewer/simpler layers, faster optimizer 
-(e.g. “RMSprop” is heavier and slower than “Adam”), and/or fewer epochs.
-
-FROM CANDIDATE HANDBOOK
- - Preprocess data to get it ready for use in a model
- - Use models to predict results.
- - augmentation and dropout.
- - Use pretrained models (transfer learning)
- - Extract features from pre-trained models.
- - Use callbacks to trigger the end of training cycles
- - Use datasets in different formats, including json and csv.
- - Use ImageDataGenerator
- - Use RNNS, LSTMs, GRUs and CNNs in models that work with text.
- - Train LSTMs on existing text to generate text (such as songs and poetry)
- - Use TensorFlow for time series forecasting.
- - 
-
-"""
 # TODO 1 - prepare sample models for text / for time seq
 # TODO 2 - train a model for each topic - take data from 'tfds'
 # TODO 3 practice save/ load/ transfer_learning/
 # TODO 4 explore tf.data.Dataset interface
 # TODO 5 transfer learning
-# TODO 5.1 text load pretrained embeddings
+# TODO 5.1 text load pretrained embeddings + text generation
 
 _DATA_DIR = "/home/cortica/.keras/datasets/flower_photos"
 logging.basicConfig(format='%(asctime)s %(levelname)-8s %(message)s')
@@ -84,6 +52,14 @@ def download_fmnist():
     fmnist = tf.keras.datasets.fashion_mnist
     (x_train, y_train), (x_test, y_test) = fmnist.load_data()
     return (x_train, y_train), (x_test, y_test)
+
+
+def download_imdb():
+    train_data, validation_data, test_data = tfds.load(
+        name="imdb_reviews",
+        split=('train[:60%]', 'train[60%:]', 'test'),
+        as_supervised=True)
+    return train_data, validation_data
 
 
 class CustomCallback(tf.keras.callbacks.Callback):
@@ -148,14 +124,17 @@ class TrainingUtils:
                             epochs=epochs,
                             batch_size=batch_size,
                             callbacks=[lr_schedule, CustomCallback()])
-        TrainingUtils.visualize_lr_selection(history.history.get("lr"), history.history.get("loss"))
+        TrainingUtils.visualize_lr_selection(history.history.get("lr"), history.history.get("loss"), mode=mode)
         return history
 
     @staticmethod
-    def visualize_lr_selection(lr_values, loss_values, out_dir="."):
+    def visualize_lr_selection(lr_values, loss_values, mode, out_dir="."):
         fig, ax = plt.gcf(), plt.gca()
-        ax.semilogx(lr_values, loss_values, marker="d")
-        loss_range = [max(min(loss_values) - .5, 0), 2 * min(loss_values)]
+        marker = 'd'
+        loss_range = [max(min(loss_values) - .5, 0), np.percentile(loss_values, 80)]
+        if mode == 'epoch':
+            marker = ''
+        ax.semilogx(lr_values, loss_values, lw=1, marker=marker)
         lr_range = (min(lr_values), max(lr_values))
         axis_range = [1e-8, 1e-1, *loss_range]
         ax.axis(axis_range)
@@ -174,7 +153,8 @@ class TrainingUtils:
         axs[0].set_xlabel("#epoch")
         axs[0].set_ylabel("Loss")
         axs[0].yaxis.grid(True)
-        axs[0].set_ylim(0, 5)
+        ylim = (0, 5) if max(loss_validation) > 2 else (0, 1)
+        axs[0].set_ylim(*ylim)
         axs[0].legend()
 
         axs[1].plot(acc_train, marker='.', label='train', lw=1)
@@ -192,7 +172,7 @@ class TrainingUtils:
 
     @staticmethod
     def train_model(model: tf.keras.Model, train_data, validation_data, optimizer, loss='categorical_crossentropy',
-                    epochs=3, verbose=1, callbacks=None):
+                    epochs=3, verbose=1, batch_size=None, callbacks=None):
         # init
         K.clear_session()
         tf.random.set_seed(51)
@@ -209,7 +189,8 @@ class TrainingUtils:
                             validation_data=validation_data,
                             epochs=epochs,
                             verbose=verbose,
-                            callbacks=callbacks)
+                            callbacks=callbacks,
+                            batch_size=batch_size)
         return history
 
 
@@ -272,26 +253,115 @@ def run_image_classification():
                                                             monitor='val_acc',
                                                             save_best_only=True)
     lr_callback = tf.keras.callbacks.LearningRateScheduler(lambda ep, lr: lr if ep < 20 else lr / 2)
+
+    # Select LR #
     # hist = tu.select_lr(model, train, mode='epoch_coarse', loss=tf.keras.losses.sparse_categorical_crossentropy, batch_size=BS)
+
+    # Train #
     hist = tu.train_model(model, train, validation, opt,
                           loss='sparse_categorical_crossentropy',
                           epochs=N_EPOCHS,
                           callbacks=[save_best_callback, lr_callback])
 
-    # save
+    # Save #
     # tu.save_model(model)
     # tu.save_history(hist)
-    tu.visualize_training(hist.history['loss'], hist.history.get('val_loss', []), hist.history['acc'], hist.history.get('val_acc', []))
+    # tu.visualize_training(hist.history['loss'], hist.history.get('val_loss', []), hist.history['acc'], hist.history.get('val_acc', []))
 
-
-    # LOAD best model !!! check warnings!!
-    # model.load_weights("best_model")
+    # # LOAD best model
+    # model.load_weights("best_model").expect_partial()
     # model.compile(opt, loss="sparse_categorical_crossentropy", metrics=["acc"])
     # model.evaluate(validation)
+    # tu.save_model(model)
+
+
+def prepare_text_data(data_iter, tokenizer=None, num_words=10000, oov_token="<oov>",
+                      remove_stop_words=True) -> Tuple[np.array, np.array, Tokenizer]:
+    MAX_SEQ_LEN = 120
+    PADDING = 'post'
+    TRUNCATING = 'post'
+    sentences = []
+    labels = []
+
+    stopwords = ["a", "about", "above", "after", "again", "against", "all", "am", "an", "and", "any", "are", "as", "at",
+                 "be", "because", "been", "before", "being", "below", "between", "both", "but", "by", "could", "did",
+                 "do", "does", "doing", "down", "during", "each", "few", "for", "from", "further", "had", "has", "have",
+                 "having", "he", "he'd", "he'll", "he's", "her", "here", "here's", "hers", "herself", "him", "himself",
+                 "his", "how", "how's", "i", "i'd", "i'll", "i'm", "i've", "if", "in", "into", "is", "it", "it's",
+                 "its", "itself", "let's", "me", "more", "most", "my", "myself", "nor", "of", "on", "once", "only",
+                 "or", "other", "ought", "our", "ours", "ourselves", "out", "over", "own", "same", "she", "she'd",
+                 "she'll", "she's", "should", "so", "some", "such", "than", "that", "that's", "the", "their", "theirs",
+                 "them", "themselves", "then", "there", "there's", "these", "they", "they'd", "they'll", "they're",
+                 "they've", "this", "those", "through", "to", "too", "under", "until", "up", "very", "was", "we",
+                 "we'd", "we'll", "we're", "we've", "were", "what", "what's", "when", "when's", "where", "where's",
+                 "which", "while", "who", "who's", "whom", "why", "why's", "with", "would", "you", "you'd", "you'll",
+                 "you're", "you've", "your", "yours", "yourself", "yourselves"]
+
+    for sentence, label in data_iter:
+        sentence = sentence.numpy().decode('utf-8').strip()
+        label = int(label.numpy())
+
+        if remove_stop_words:
+            for word in stopwords:
+                token = " " + word + " "
+                sentence = sentence.replace(token, " ")
+        sentences.append(sentence)
+        labels.append(label)
+    print(f'sentences n : {len(sentences)}')
+
+    # Tokenizing - TRAIN
+    if tokenizer is None:
+        tokenizer = tf.keras.preprocessing.text.Tokenizer(num_words=num_words, oov_token=oov_token)
+        tokenizer.fit_on_texts(sentences)
+
+    sequences = tokenizer.texts_to_sequences(sentences)
+    sequences_padded = tf.keras.preprocessing.sequence.pad_sequences(sequences,
+                                                                     maxlen=MAX_SEQ_LEN,
+                                                                     padding=PADDING,
+                                                                     truncating=TRUNCATING)
+
+    return sequences_padded, labels, tokenizer
+
+
+def run_text_exp():
+    # params training #
+    LR = 3 * 10 ** -4
+    BS = 512
+    N_EPOCHS = 10
+
+    model = get_sample_text_model(10000, num_classes=2)
+    model.summary()
+
+    # imdb data
+    train_data, validation_data = download_imdb()
+
+    train_sequences, train_labels, tok = prepare_text_data(list(train_data), num_words=10 ** 4, remove_stop_words=True)
+    validation_sequences, validation_labels, _ = prepare_text_data(validation_data, tokenizer=tok, remove_stop_words=True)
+
+    train_gen = tf.data.Dataset.from_tensor_slices((train_sequences.tolist(), train_labels)).batch(BS)
+    validation_gen = tf.data.Dataset.from_tensor_slices((validation_sequences.tolist(), validation_labels)).batch(BS)
+
+    # Training #
+    tu = TrainingUtils()
+    opt = tf.keras.optimizers.Adam()
+    # history = tu.select_lr(model, train_gen, tf.keras.losses.binary_crossentropy, opt, mode='epoch', epochs=100)
+    # tu.save_history(history, 'lr_hist')
+
+    hist = tu.train_model(model,
+                          train_gen,
+                          validation_gen,
+                          opt,
+                          loss='binary_crossentropy', epochs=N_EPOCHS)
+
+    tu.visualize_training(hist.history['loss'], hist.history.get('val_loss', []),
+                          hist.history['acc'], hist.history.get('val_acc', []))
 
 
 if __name__ == '__main__':
     # check_environment()
-    run_image_classification()
+    # run_image_classification()
+
+    run_text_exp()
+
 
 
