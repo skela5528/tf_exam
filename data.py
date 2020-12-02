@@ -28,9 +28,15 @@ img_train_datagen = tf.keras.preprocessing.image.ImageDataGenerator(rotation_ran
                                                                     height_shift_range=0.1,
                                                                     zoom_range=0.1,
                                                                     horizontal_flip=True,
-                                                                    validation_split=VAL_SPLIT)
-img_validation_datagen = tf.keras.preprocessing.image.ImageDataGenerator(validation_split=VAL_SPLIT)
+                                                                    validation_split=VAL_SPLIT,
+                                                                    rescale=1/255)
+img_validation_datagen = tf.keras.preprocessing.image.ImageDataGenerator(validation_split=VAL_SPLIT, rescale=1/255)
 
+# FROM DIRECTORY ##
 # class_mode: One of "categorical", "binary", "sparse"
 img_train_datagen.flow_from_directory(directory=DATA_DIR, target_size=IMG_SIZE, batch_size=BS, interpolation='bicubic', class_mode='categorical', seed=111)
 img_validation_datagen.flow_from_directory(directory=DATA_DIR, target_size=IMG_SIZE, batch_size=BS, interpolation='bicubic', class_mode='categorical', seed=111)
+
+# FROM NP.ARRAY ##
+# img_train_datagen.flow(x, y, batch_size=BS)
+# img_validation_datagen.flow(valid_x, valid_y, batch_size=BS)

@@ -1,5 +1,7 @@
 import tensorflow as tf
 
+from tensorflow.keras.applications import vgg16, resnet
+
 
 def get_conv_pool_block(filters, kernel_size=3, activation='relu', add_batch_norm=False, bid=-1):
     name = f"Conv-{filters}-MaxPool-{bid}"
@@ -59,8 +61,30 @@ def get_sample_image_model(input_shape, num_classes, bn=False, dropout_p=0):
     return model
 
 
-def get_sample_text_model():
-    pass
+def get_sample_text_model(in_dim, embedding_out_dim=64, input_length=None, num_classes=None, dropout_p=0):
+    model = tf.keras.Sequential()
+    model.add(tf.keras.layers.Embedding(input_dim=in_dim,
+                                        output_dim=embedding_out_dim,
+                                        input_length=input_length))
+    if dropout_p > 0:
+        model.add(tf.keras.layers.Dropout(dropout_p))
+    model.add(tf.keras.layers.Conv1D(64, 5, activation='relu'))
+    model.add(tf.keras.layers.MaxPooling1D(pool_size=4))
+    model.add(tf.keras.layers.Bidirectional(tf.keras.layers.LSTM(64, return_sequences=True)))
+    model.add(tf.keras.layers.LSTM(50))
+
+    # Classifier (no need bool after LSTM)
+    model.add(tf.keras.layers.Dense(128, activation='relu'))
+    if dropout_p > 0:
+        model.add(tf.keras.layers.Dropout(dropout_p))
+
+    out_units = 1
+    out_activation = 'sigmoid'
+    if num_classes > 2:
+        out_units = num_classes
+        out_activation = 'softmax'
+    model.add(tf.keras.layers.Dense(units=out_units, activation=out_activation))
+    return model
 
 
 def get_sample_time_series_model():
